@@ -1,0 +1,15 @@
+{
+  "name": "big-file-upload",
+  "version": "1.0.0",
+  "description": "big file upload samples",
+  "main": "server.mjs",
+  "scripts": {
+    "dev": "node server.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "formidable": "^2.1.1"
+  }
+}

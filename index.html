@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+</head>
+
+<body>
+  <input id="upload" type="file">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/blueimp-md5/2.19.0/js/md5.min.js"
+    integrity="sha512-8pbzenDolL1l5OPSsoURCx9TEdMFTaeFipASVrMYKhuYtly+k3tcsQYliOEKTmuB1t7yuzAiVo+yd7SJz+ijFQ=="
+    crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script>
+    // 设计题：设计⼀个⼤⽂件上传的逻辑（断点续传），需要包括以下内容：
+    // 初步的设计⽅案，包含前后端解决思路、⽤到的http协议头和对应的传输机制等等；
+    // 前端上传相关代码；
+    // 后端处理相关逻辑，可以使⽤伪代码形式，如果有node.js经验则采⽤代码呈现；
+    // 请尽量提升上传稳定性；
+    document.getElementById('upload').addEventListener('change', handleChange)
+
+    // 每一个chunk大小 4MB
+    const chunkSize = 4 * 1024 * 1024
+    /**
+     * @param {File} file
+     */
+    async function handleChange(e) {
+      if (e.target.files.length > 0) {
+        const file = e.target.files[0]
+        // 大于chunkSize的才分块上传
+        if (file.size > chunkSize) {
+          handleSplit(file)
+        } else {
+          // 直接上传
+          getChunkId(file).then(fileId => {
+            uploadFile(file, fileId)
+          })
+        }
+      }
+    }
+
+    function handleMerge(fileId, fileName, total) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', '/merge')
+        xhr.send(JSON.stringify({
+          fileId,
+          fileName,
+          total
+        }))
+        xhr.onreadystatechange = function (e) {
+          if (xhr.status === 4) {
+            const obj = JSON.parse(e.responseText)
+            if (xhr.status === 200) {
+              resolve(obj)
+            } else {
+              reject(obj)
+            }
+          }
+        }
+      })
+    }
+
+    function handleSplit(file) {
+      getChunkId(file).then(async (res) => {
+        const fileId = res
+        const chunkArr = []
+        const total = Math.ceil(file.size / chunkSize)
+        let fileStatus = []
+        if (localStorage.getItem(`upload_${fileId}`)) {
+          const result = (await checkStatus(fileId))
+          fileStatus = result.data
+        }
+        for (let i = 0; i < total; i++) {
+          const chunk = file.slice(i * chunkSize, (i + 1) * chunkSize)
+          if (!fileStatus.includes(i)) {
+            chunkArr.push({
+              chunk: chunk,
+              chunkNo: i
+            })
+          }
+        }
+        localStorage.setItem(`upload_${fileId}`, '1')
+        await handleUploadChunk(chunkArr, fileId)
+        await handleMerge(fileId, file.name, total)
+        localStorage.removeItem(`upload_${fileId}`)
+      })
+    }
+
+    async function handleUploadChunk(chunkArr, fileId) {
+      return new Promise((resolve, reject) => {
+        const maxConcurrency = 4
+        const queue = []
+        let active = 0
+        let left = chunkArr.length
+        const uploadChunk = (chunkObj) => {
+          active++
+          if (active < maxConcurrency) exec()
+          uploadFile(chunkObj.chunk, fileId, chunkObj.chunkNo, chunkObj.chunkId).then((data) => {
+            left--
+            if (left === 0) {
+              return resolve()
+            }
+            active--
+            exec()
+          }).catch(e => {
+            // 错误重传?
+            active--
+            uploadChunk(chunkObj)
+          })
+        }
+        function exec() {
+          const fn = queue.shift()
+          setTimeout(() => {
+          }, 3000)
+          fn && fn()
+        }
+        chunkArr.forEach(e => {
+          queue.push(() => uploadChunk(e))
+        })
+
+        exec()
+      })
+    }
+
+    function uploadFile(file, fileId, chunkNo, chunkId) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        const formData = new FormData();
+        formData.append('file', file)
+        formData.append('fileId', fileId)
+        if (chunkNo !== undefined) {
+          // formData.append('chunkId', chunkId)
+          formData.append('chunkNo', chunkNo)
+        }
+        xhr.open('POST', '/upload')
+        xhr.send(formData)
+        xhr.onreadystatechange = function (e) {
+          if (xhr.readyState === 4) {
+            const obj = JSON.parse(xhr.responseText)
+            if (xhr.status === 200) {
+              resolve(obj)
+            } else {
+              reject(obj)
+            }
+          }
+        }
+      })
+    }
+
+    function checkStatus(fileId) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+
+        xhr.open('POST', '/checkStatus')
+        xhr.send(JSON.stringify({ fileId }))
+        xhr.onreadystatechange = function (e) {
+          if (xhr.readyState === 4) {
+            const obj = JSON.parse(xhr.responseText)
+            if (xhr.status === 200) {
+              resolve(obj)
+            } else {
+              reject(obj)
+            }
+          }
+        }
+      })
+    }
+
+    function getChunkId(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        let blob = file
+        if (file.size > chunkSize) {
+          blob = new Blob([file.slice(0, chunkSize / 2), file.slice(file.size - chunkSize / 2, file.size)])
+        }
+        reader.readAsText(blob)
+        reader.onload = function () {
+          resolve(md5(`${reader.result}${file.lastModified}${file.name}${file.size}`))
+        }
+      })
+    }
+
+
+  </script>
+</body>
+
+</html>
